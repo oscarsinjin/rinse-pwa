@@ -1,56 +1,57 @@
-# Welcome to your Expo app 👋
+# Rinse
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+An Uber-style home laundry marketplace for South Africa. Three mobile apps share one Supabase backend:
+
+- `apps/customer` — schedule pickups, pay, track orders live, rate partner/driver/service
+- `apps/partner` — set availability, accept/decline orders, mark jobs done, cash out
+- `apps/driver` — go online, accept nearest-first job offers, confirm pickup/delivery with photos, cash out
+- `packages/shared` — Supabase client, auth (phone OTP), DB types, theme tokens, shared UI
+- `supabase/` — schema migrations, seed data, and the PayFast edge functions
 
 ## Get started
 
-1. Install dependencies
+1. Install dependencies (run once, from the repo root):
 
    ```bash
    npm install
    ```
 
-2. Start the app
+2. Start Supabase locally (requires [Docker Desktop](https://www.docker.com/products/docker-desktop/) and the [Supabase CLI](https://supabase.com/docs/guides/local-development/cli/getting-started)):
 
    ```bash
-   npx expo start
+   cd supabase
+   supabase start
    ```
 
-In the output, you'll find options to open the app in a
+   This applies `migrations/` and `seed.sql` automatically. Copy the printed **API URL** and **anon key** into each app's `.env` (copy from `.env.example`).
 
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
+3. Run an app:
 
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
+   ```bash
+   npm run customer   # or: npm run partner / npm run driver
+   ```
 
-## Get a fresh project
+   Then press `i` (iOS), `a` (Android), or `w` (web) in the Expo CLI.
 
-When you're ready, run:
+### Test accounts (local dev only)
 
-```bash
-npm run reset-project
-```
+`supabase/config.toml` defines fixed test OTP codes so you don't need a real SMS provider locally — enter one of these numbers and the code `123456`:
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+| Number | Suggested role |
+| --- | --- |
+| 0710000001 | Customer |
+| 0710000002 | Partner |
+| 0710000003 | Driver |
 
-### Other setup steps
+## Payments (PayFast)
 
-- To set up ESLint for linting, run `npx expo lint`, or follow our guide on ["Using ESLint and Prettier"](https://docs.expo.dev/guides/using-eslint/)
-- If you'd like to set up unit testing, follow our guide on ["Unit Testing with Jest"](https://docs.expo.dev/develop/unit-testing/)
-- Learn more about the TypeScript setup in this template in our guide on ["Using TypeScript"](https://docs.expo.dev/guides/typescript/)
+`supabase/functions/payfast-checkout` builds a signed PayFast redirect; `payfast-webhook` verifies PayFast's ITN and marks orders paid. Both need secrets set before they'll work — copy `supabase/.env.example` to `supabase/.env` for local testing with PayFast's public sandbox credentials (already filled in), or `supabase secrets set` for a deployed project.
 
-## Learn more
+## What's stubbed
 
-To learn more about developing your project with Expo, look at the following resources:
+This is a working skeleton, not a finished product. Known simplifications to revisit:
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+- **Partner matching** (`apps/customer/src/app/booking/matching.tsx`) picks the best-rated approved partner directly — no real nearest-first distance ranking or timed accept/decline yet (the `dispatch_offers` table already supports it).
+- **Driver dispatch** isn't triggered automatically when a partner accepts an order or marks it done — there's a `TODO` at each hook point in the partner Home screen and this would be a Postgres function or edge function reacting to order status changes.
+- **Driver earnings** use a flat placeholder rate per completed leg (`RATE_PER_TRIP` in `apps/driver/src/app/(tabs)/earnings.tsx`) — no real per-km payout schedule yet.
+- **Admin dashboard** (approving partners/drivers, managing service tiers) is out of scope per the original spec — currently you'd approve accounts by flipping `status` to `'approved'` directly in the database.
