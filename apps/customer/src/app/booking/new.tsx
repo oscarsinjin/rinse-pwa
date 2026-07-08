@@ -1,8 +1,9 @@
+import { Ionicons } from '@expo/vector-icons';
 import { PrimaryButton, useAuth, type ServiceTier } from '@rinse/shared';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { ActivityIndicator, Platform, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -46,23 +47,45 @@ export default function NewBookingScreen() {
 
   async function handleUseCurrentLocation() {
     setLocating(true);
+    setError(null);
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setError('Location permission denied. Enter your address manually.');
-        return;
-      }
-      const position = await Location.getCurrentPositionAsync({});
-      setCoords({ lat: position.coords.latitude, lng: position.coords.longitude });
+      let latitude: number;
+      let longitude: number;
 
-      const [place] = await Location.reverseGeocodeAsync({
-        latitude: position.coords.latitude,
-        longitude: position.coords.longitude,
-      });
-      if (place) {
-        setLine1([place.streetNumber, place.street].filter(Boolean).join(' '));
-        setSuburb(place.district ?? place.subregion ?? '');
-        setCity(place.city ?? '');
+      if (Platform.OS === 'web') {
+        // On web, navigator.geolocation is the reliable path. expo-location's
+        // requestForegroundPermissionsAsync() only queries the Permissions API
+        // (which returns 'undetermined' before the user has been asked) and
+        // would bail out early without ever showing the browser dialog.
+        const position = await new Promise<GeolocationPosition>((resolve, reject) =>
+          navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 10000 })
+        );
+        latitude = position.coords.latitude;
+        longitude = position.coords.longitude;
+      } else {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          setError('Location permission denied. Enter your address manually.');
+          return;
+        }
+        const pos = await Location.getCurrentPositionAsync({});
+        latitude = pos.coords.latitude;
+        longitude = pos.coords.longitude;
+      }
+
+      setCoords({ lat: latitude, lng: longitude });
+
+      // Reverse geocode is best-effort: it requires a Google Maps key on web,
+      // so failures are silenced and the user fills in the address manually.
+      try {
+        const [place] = await Location.reverseGeocodeAsync({ latitude, longitude });
+        if (place) {
+          setLine1([place.streetNumber, place.street].filter(Boolean).join(' '));
+          setSuburb(place.district ?? place.subregion ?? '');
+          setCity(place.city ?? '');
+        }
+      } catch {
+        // reverse geocode unavailable (e.g. web without Maps key) — coords already saved
       }
     } catch {
       setError('Could not get your location. Enter your address manually.');
@@ -139,100 +162,152 @@ export default function NewBookingScreen() {
   }
 
   return (
-    <ScrollView contentContainerStyle={styles.container}>
-      <ThemedText type="title" style={{ fontSize: 28, marginBottom: 24 }}>
-        Schedule a pickup
-      </ThemedText>
-
-      <Section title="When">
-        <View style={styles.toggleRow}>
-          <ToggleChip label="ASAP" selected={isAsap} onPress={() => setIsAsap(true)} theme={theme} />
-          <ToggleChip label="Later today" selected={!isAsap} onPress={() => setIsAsap(false)} theme={theme} />
+    <ThemedView style={{ flex: 1 }}>
+      <View style={[styles.stepHeader, { borderBottomColor: theme.backgroundElement }]}>
+        <Pressable onPress={() => router.back()} style={styles.backButton}>
+          <Ionicons name="chevron-back" size={22} color={theme.text} />
+        </Pressable>
+        <View style={{ flex: 1 }}>
+          <ThemedText style={styles.stepTitle}>Book a pickup</ThemedText>
+          <ThemedText themeColor="textSecondary" style={styles.stepSub}>Step 1 of 3</ThemedText>
         </View>
-      </Section>
+      </View>
 
-      <Section title="Pickup address">
-        <PrimaryButton
-          label="Use current location"
-          variant="outline"
-          onPress={handleUseCurrentLocation}
-          loading={locating}
-        />
-        <TextInput
-          value={line1}
-          onChangeText={setLine1}
-          placeholder="Street address"
-          placeholderTextColor={theme.textSecondary}
-          style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-        />
-        <TextInput
-          value={suburb}
-          onChangeText={setSuburb}
-          placeholder="Suburb"
-          placeholderTextColor={theme.textSecondary}
-          style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-        />
-        <TextInput
-          value={city}
-          onChangeText={setCity}
-          placeholder="City"
-          placeholderTextColor={theme.textSecondary}
-          style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
-        />
-      </Section>
+      <View style={styles.progressBar}>
+        <View style={[styles.progressSegment, { backgroundColor: theme.tint }]} />
+        <View style={[styles.progressSegment, { backgroundColor: theme.backgroundElement }]} />
+        <View style={[styles.progressSegment, { backgroundColor: theme.backgroundElement }]} />
+      </View>
 
-      <Section title="Service tier">
-        {loadingTiers ? (
-          <ActivityIndicator />
-        ) : (
-          tiers.map((tier) => (
-            <Pressable key={tier.id} onPress={() => setSelectedTierId(tier.id)}>
-              <ThemedView
-                type={selectedTierId === tier.id ? 'backgroundSelected' : 'backgroundElement'}
-                style={styles.tierCard}>
-                <ThemedText type="smallBold">{tier.name}</ThemedText>
-                <ThemedText themeColor="textSecondary" type="small">
-                  {tier.description}
-                </ThemedText>
-                <ThemedText type="small" style={{ marginTop: 4 }}>
-                  From R{tier.base_price.toFixed(0)} ·{' '}
-                  {tier.category === 'everyday' ? 'Home partners' : 'Laundromat partners'}
-                </ThemedText>
-              </ThemedView>
-            </Pressable>
-          ))
-        )}
-      </Section>
-
-      <Section title="Items">
-        {ITEM_CATEGORIES.map((category) => (
-          <View key={category} style={styles.itemRow}>
-            <ThemedText style={{ flex: 1 }}>{category}</ThemedText>
-            <Pressable onPress={() => adjustQuantity(category, -1)} style={styles.stepperButton}>
-              <ThemedText type="smallBold">-</ThemedText>
-            </Pressable>
-            <ThemedText style={styles.stepperValue}>{quantities[category] ?? 0}</ThemedText>
-            <Pressable onPress={() => adjustQuantity(category, 1)} style={styles.stepperButton}>
-              <ThemedText type="smallBold">+</ThemedText>
-            </Pressable>
+      <ScrollView contentContainerStyle={styles.container}>
+        <Section title="When">
+          <View style={styles.chipRow}>
+            <Chip label="ASAP" selected={isAsap} onPress={() => setIsAsap(true)} theme={theme} />
+            <Chip label="Later today" selected={!isAsap} onPress={() => setIsAsap(false)} theme={theme} />
           </View>
-        ))}
-      </Section>
+        </Section>
 
-      {selectedTier && totalItems > 0 && (
-        <ThemedText style={{ marginBottom: 12 }}>Estimated total: R{estimatedTotal.toFixed(2)}</ThemedText>
-      )}
-      {error && <ThemedText style={{ color: '#E5484D', marginBottom: 12 }}>{error}</ThemedText>}
+        <Section title="Service">
+          {loadingTiers ? (
+            <ActivityIndicator />
+          ) : (
+            <View style={styles.chipRow}>
+              {tiers.map((tier) => (
+                <Chip
+                  key={tier.id}
+                  label={tier.name}
+                  selected={selectedTierId === tier.id}
+                  onPress={() => setSelectedTierId(tier.id)}
+                  theme={theme}
+                />
+              ))}
+            </View>
+          )}
+          {selectedTier && (
+            <View style={[styles.tierInfo, { backgroundColor: theme.backgroundElement, borderRadius: 12 }]}>
+              <ThemedText style={{ fontWeight: '600' }}>{selectedTier.name}</ThemedText>
+              <ThemedText themeColor="textSecondary" style={{ fontSize: 13, marginTop: 2 }}>
+                {selectedTier.description}
+              </ThemedText>
+              <ThemedText style={{ fontSize: 13, marginTop: 6, color: theme.tint, fontWeight: '600' }}>
+                {selectedTier.price_per_kg ? `R${selectedTier.price_per_kg}/kg` : `from R${selectedTier.base_price.toFixed(0)}`}
+                {' · '}
+                {selectedTier.category === 'everyday' ? 'Home partners' : 'Laundromat partners'}
+              </ThemedText>
+            </View>
+          )}
+        </Section>
 
-      <PrimaryButton label="Find a partner" onPress={handleSubmit} disabled={!canSubmit} loading={submitting} />
-    </ScrollView>
+        <Section title="Pickup address">
+          <Pressable
+            onPress={handleUseCurrentLocation}
+            style={[styles.locationButton, { borderColor: theme.tint }]}>
+            {locating ? (
+              <ActivityIndicator size="small" color={theme.tint} />
+            ) : (
+              <>
+                <Ionicons name="location-outline" size={18} color={theme.tint} />
+                <ThemedText style={{ color: theme.tint, fontWeight: '600', fontSize: 15 }}>
+                  Use current location
+                </ThemedText>
+              </>
+            )}
+          </Pressable>
+          <TextInput
+            value={line1}
+            onChangeText={setLine1}
+            placeholder="Street address"
+            placeholderTextColor={theme.textSecondary}
+            style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+          />
+          <TextInput
+            value={suburb}
+            onChangeText={setSuburb}
+            placeholder="Suburb"
+            placeholderTextColor={theme.textSecondary}
+            style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+          />
+          <TextInput
+            value={city}
+            onChangeText={setCity}
+            placeholder="City"
+            placeholderTextColor={theme.textSecondary}
+            style={[styles.input, { color: theme.text, borderColor: theme.backgroundSelected }]}
+          />
+        </Section>
+
+        <Section title="Items">
+          {ITEM_CATEGORIES.map((category) => (
+            <View key={category} style={[styles.itemRow, { borderBottomColor: theme.backgroundElement }]}>
+              <ThemedText style={{ flex: 1, fontSize: 15 }}>{category}</ThemedText>
+              <View style={styles.stepper}>
+                <Pressable
+                  onPress={() => adjustQuantity(category, -1)}
+                  style={[styles.stepperBtn, { backgroundColor: theme.backgroundElement }]}>
+                  <ThemedText style={styles.stepperSign}>−</ThemedText>
+                </Pressable>
+                <ThemedText style={styles.stepperVal}>{quantities[category] ?? 0}</ThemedText>
+                <Pressable
+                  onPress={() => adjustQuantity(category, 1)}
+                  style={[styles.stepperBtn, { backgroundColor: theme.tint }]}>
+                  <ThemedText style={[styles.stepperSign, { color: '#fff' }]}>+</ThemedText>
+                </Pressable>
+              </View>
+            </View>
+          ))}
+        </Section>
+
+        {error && <ThemedText style={{ color: '#E5484D', marginBottom: 4 }}>{error}</ThemedText>}
+
+        <View style={{ height: 100 }} />
+      </ScrollView>
+
+      <View style={[styles.bottomBar, { borderTopColor: theme.backgroundElement, backgroundColor: theme.background }]}>
+        <View>
+          <ThemedText themeColor="textSecondary" style={{ fontSize: 12 }}>
+            {totalItems === 0 ? 'Add items to continue' : `${totalItems} items`}
+          </ThemedText>
+          <ThemedText style={{ fontSize: 20, fontWeight: '700' }}>
+            {estimatedTotal > 0 ? `R${estimatedTotal.toFixed(0)}` : 'R0'}
+          </ThemedText>
+        </View>
+        <View style={{ flex: 1 }}>
+          <PrimaryButton
+            label="Continue"
+            onPress={handleSubmit}
+            disabled={!canSubmit}
+            loading={submitting}
+          />
+        </View>
+      </View>
+    </ThemedView>
   );
 }
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <View style={styles.section}>
-      <ThemedText type="smallBold" themeColor="textSecondary" style={{ marginBottom: 8 }}>
+      <ThemedText themeColor="textSecondary" style={styles.sectionLabel}>
         {title.toUpperCase()}
       </ThemedText>
       {children}
@@ -240,7 +315,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function ToggleChip({
+function Chip({
   label,
   selected,
   onPress,
@@ -249,35 +324,77 @@ function ToggleChip({
   label: string;
   selected: boolean;
   onPress: () => void;
-  theme: { tint: string; backgroundElement: string };
+  theme: { tint: string; backgroundElement: string; text: string };
 }) {
   return (
     <Pressable
       onPress={onPress}
       style={[
         styles.chip,
-        { backgroundColor: selected ? theme.tint : theme.backgroundElement },
+        selected
+          ? { backgroundColor: '#111111' }
+          : { backgroundColor: theme.backgroundElement },
       ]}>
-      <ThemedText style={selected ? { color: '#fff' } : undefined}>{label}</ThemedText>
+      <ThemedText style={[styles.chipLabel, selected && { color: '#fff' }]}>{label}</ThemedText>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 24, paddingBottom: 48 },
-  section: { marginBottom: 24, gap: 8 },
-  toggleRow: { flexDirection: 'row', gap: 8 },
-  chip: { paddingHorizontal: 16, paddingVertical: 10, borderRadius: 999 },
-  input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, height: 48, fontSize: 16 },
-  tierCard: { borderRadius: 14, padding: 14, marginBottom: 8 },
-  itemRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 6 },
-  stepperButton: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+  stepHeader: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(128,128,128,0.15)',
+    paddingHorizontal: 16,
+    paddingTop: 56,
+    paddingBottom: 12,
+    gap: 8,
+    borderBottomWidth: 1,
   },
-  stepperValue: { width: 24, textAlign: 'center' },
+  backButton: { padding: 4 },
+  stepTitle: { fontSize: 17, fontWeight: '700' },
+  stepSub: { fontSize: 13 },
+  progressBar: {
+    flexDirection: 'row',
+    gap: 4,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  progressSegment: { flex: 1, height: 3, borderRadius: 2 },
+  container: { padding: 20, gap: 4, paddingBottom: 16 },
+  section: { marginBottom: 20, gap: 10 },
+  sectionLabel: { fontSize: 12, fontWeight: '700', letterSpacing: 0.5 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: { paddingHorizontal: 16, paddingVertical: 9, borderRadius: 999 },
+  chipLabel: { fontSize: 14, fontWeight: '600' },
+  tierInfo: { padding: 14 },
+  locationButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    borderWidth: 1.5,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    height: 48,
+  },
+  input: { borderWidth: 1, borderRadius: 12, paddingHorizontal: 16, height: 48, fontSize: 16 },
+  itemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+  },
+  stepper: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  stepperBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  stepperSign: { fontSize: 18, fontWeight: '600', lineHeight: 22 },
+  stepperVal: { width: 24, textAlign: 'center', fontSize: 15, fontWeight: '600' },
+  bottomBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderTopWidth: 1,
+    paddingBottom: 28,
+  },
 });
