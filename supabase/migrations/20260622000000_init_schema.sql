@@ -426,6 +426,35 @@ as $$
   );
 $$;
 
+-- Used by the addresses SELECT policy so partners/drivers can read the
+-- pickup address on orders they are involved in. Safe to call from a
+-- SELECT-only policy; do NOT use from the orders SELECT policy (see
+-- order_has_driver_access and the comment on orders_select_customer below).
+create function public.is_order_participant(target_order_id uuid)
+returns boolean
+language sql
+security definer
+set search_path = public
+stable
+as $$
+  select exists (
+    select 1 from public.orders o
+    where o.id = target_order_id
+      and (o.customer_id = auth.uid() or o.partner_id = auth.uid())
+  )
+  or exists (
+    select 1 from public.order_trips t
+    where t.order_id = target_order_id and t.driver_id = auth.uid()
+  )
+  or exists (
+    select 1 from public.dispatch_offers d
+    join public.order_trips t on t.id = d.order_trip_id
+    where t.order_id = target_order_id
+      and d.candidate_id = auth.uid()
+      and d.status = 'offered'
+  );
+$$;
+
 -- ---------------------------------------------------------------------------
 -- Table-level grants. RLS policies (below) restrict which *rows* anon/
 -- authenticated can see; these grants control whether they can touch the
